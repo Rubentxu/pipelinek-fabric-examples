@@ -1,0 +1,75 @@
+# The manifest of eshop-dotnet.pipeline.kts: what the script runs with.
+#
+# The upstream is dotnet/eShop, licensed MIT (LICENSE at the pinned commit) — compatible with this
+# examples repository, and the pipeline only reads its source: the bounded slice is
+# tests/Basket.UnitTests, one self-contained MSTest assembly whose tests drive the basket service
+# over NSubstitute fakes. The FunctionalTests (Playwright, whole app) and the MAUI client assembly
+# (needs workloads the SDK image does not carry) are out of the slice by design.
+#
+# The worker that measures this reference has no dotnet on its PATH, so the toolchain is the
+# containerized SDK: mcr.microsoft.com/dotnet/sdk — the canonical public registry of the .NET
+# images — pinned to the exact @sha256 digest of the 11.0.100 tag, the SDK version global.json
+# names at the pinned commit. A tag would move under the run; this digest is the reproducible
+# toolchain the manifest promises (the multi-arch index is
+# sha256:2794448a07118a6eaf00f29ab5d2bf44928517ce5ff86505a63a69230374f599; its linux/amd64 platform
+# manifest is sha256:ebb9071906aedf9f85c1d8eeeba3138a22f31d548ab99658ef3943768bf7321d). The quality
+# stage refuses when the SDK inside the container is not the pinned version.
+#
+# Fixed values are the ones this pipeline brings: the upstream project, the commit it is fixed at,
+# the slice inside it, and the SDK image and version. Overridable values are the ones a run may
+# set; every one has a safe public default. The default profile is quick, and the default is not to
+# publish anything: a run that wants real-ci with a publication must declare the registry, the tag
+# and the digest-pinned runtime base image, and the script refuses before it builds anything when
+# one of them is missing. DOTNET_FORMAT_GATE stays false by default because upstream never gates
+# format and the pinned source is not format-clean — turning it on makes the format stage a real
+# gate with real failures, never a green it did not earn.
+#
+# The manifest names no publication registry and no cluster: the registries are empty defaults an
+# operator must fill, and where the workers run is the operator's binding.
+metadata:
+  version: "1"
+  labels:
+    example: eshop-dotnet
+    language: dotnet
+  annotations:
+    upstream: dotnet/eShop
+    upstream-commit: 669682e724306a48f6c6ec4c8afea941658bf3a7
+    slice: tests/Basket.UnitTests
+    license: MIT
+    toolchain: ".NET SDK 11.0.100, pinned by container digest; no host dotnet required"
+spec:
+  requirements:
+    cpu: 2.0
+    memoryMb: 4096
+  env:
+    DOTNET_SOURCE_URL: https://github.com/dotnet/eShop.git
+    DOTNET_SOURCE_COMMIT: 669682e724306a48f6c6ec4c8afea941658bf3a7
+    DOTNET_TEST_PROJECT: tests/Basket.UnitTests/Basket.UnitTests.csproj
+    DOTNET_APP_PROJECT: src/Basket.API/Basket.API.csproj
+    DOTNET_SDK_IMAGE: mcr.microsoft.com/dotnet/sdk@sha256:2794448a07118a6eaf00f29ab5d2bf44928517ce5ff86505a63a69230374f599
+    DOTNET_SDK_VERSION: "11.0.100"
+  overridable:
+    DOTNET_PROFILE:
+      default: quick
+      description: "quick runs the containerized build gate and the unit suite; developer adds the opt-in format gate; real-ci runs every stage"
+    DOTNET_WORK_DIR:
+      default: eshop-dotnet-work
+      description: "the directory the build happens in; use an absolute path on a worker whose scratch is memory"
+    DOTNET_FORMAT_GATE:
+      default: "false"
+      description: "true turns the format stage into a real dotnet format --verify-no-changes gate; false reports NOT_RUN with that reason, because the pinned upstream builds without gating format and is not format-clean"
+    DOTNET_PUBLISH:
+      default: "false"
+      description: "true pushes the built image to the declared registry; only real-ci honours it"
+    DOTNET_PUSH_REGISTRY:
+      default: ""
+      description: "the registry the image is pushed to; required when publishing"
+    DOTNET_IMAGE_REPOSITORY:
+      default: basket-api
+      description: "the repository the image is pushed to inside the registry"
+    DOTNET_IMAGE_TAG:
+      default: ""
+      description: "the tag the image is built and pushed under. Required when publishing"
+    DOTNET_BASE_IMAGE:
+      default: ""
+      description: "the ASP.NET runtime base the image is assembled onto, pinned by @sha256 digest; empty or tag-named reports NOT_RUN with the reason, and it is required when publishing"
