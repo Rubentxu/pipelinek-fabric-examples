@@ -1,0 +1,71 @@
+# The manifest of axum-chat.pipeline.kts: what the script runs with.
+#
+# Fixed values are the ones this pipeline brings: the upstream project and the commit it is fixed
+# at, the toolchain the reference was certified with, and the one example crate of the axum
+# examples workspace the run builds and tests. Overridable values are the ones a run may set;
+# every one has a safe public default. The default profile is quick, and the default is not to
+# publish or deploy anything: a run that wants real-ci with a publication must declare the
+# registries, the tag, the base image and the namespace, and the script refuses before it builds
+# anything when one of them is missing.
+#
+# The name of the pair follows the task (FREF-19 asked for the chat example), the crate follows the
+# evidence: at the pinned commit the chat example holds no test, and example-compression holds
+# eight real #[tokio::test] tests, so the slice of this reference is that crate.
+#
+# The manifest names no template and no cluster: where the workers run is the operator's binding.
+metadata:
+  version: "1"
+  labels:
+    example: rust
+    language: rust
+  annotations:
+    upstream: tokio-rs/axum
+    upstream-commit: bfa66864176ffc03e508d8a8afd33c2e626ac38d
+    license: MIT (verified on the pinned commit of tokio-rs/axum)
+    selection: the chat example has no test at the pinned commit; example-compression holds eight real #[tokio::test] tests in the examples workspace
+spec:
+  requirements:
+    cpu: 2.0
+    memoryMb: 4096
+  env:
+    RS_SOURCE_URL: https://github.com/tokio-rs/axum.git
+    RS_SOURCE_COMMIT: bfa66864176ffc03e508d8a8afd33c2e626ac38d
+    RS_WORKSPACE_DIR: examples
+    RS_CRATE: example-compression
+    RS_TOOLCHAIN: "1.99.0"
+    RS_APP_PORT: "3000"
+    RS_STAGING_SERVICE: axum-staging
+  overridable:
+    RS_PROFILE:
+      default: quick
+      description: "quick builds and tests the pinned crate; developer adds clippy and the format check; real-ci runs every stage"
+    RS_WORK_DIR:
+      default: rust-work
+      description: "the directory the build happens in; use an absolute path on a worker whose scratch is memory"
+    RS_PUBLISH:
+      default: "false"
+      description: "true publishes the image and deploys it to staging; only real-ci honours it"
+    RS_REGISTRY_INSECURE:
+      default: "false"
+      description: "true lets crane talk plain HTTP to the registry; leave false for a TLS registry"
+    RS_PUSH_REGISTRY:
+      default: ""
+      description: "the registry the image is pushed to; required when publishing"
+    RS_PULL_REGISTRY:
+      default: ""
+      description: "the registry address the cluster pulls the image from; required when publishing"
+    RS_IMAGE_REPOSITORY:
+      default: axum-example-compression
+      description: "the repository the image is pushed to inside the registry"
+    RS_IMAGE_TAG:
+      default: ""
+      description: "the tag the image is pushed under; the deployment names the digest, not the tag. Required when publishing"
+    RS_BASE_IMAGE:
+      default: ""
+      description: "the runtime image of the publication: its libc must be at least the one the worker linked against, because the publish stage appends the release binary and installs nothing at run. Required when publishing"
+    RS_BUILD_IMAGE:
+      default: ""
+      description: "the image the container stage builds the example inside of and boots for the smoke; empty means rust:<RS_TOOLCHAIN>, whose cargo compiles the pinned source and whose curl answers the probe"
+    RS_STAGING_NAMESPACE:
+      default: ""
+      description: "the namespace of the temporary staging; required when publishing. The credential rust-staging-kubeconfig must be registered"
