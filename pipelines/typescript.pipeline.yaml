@@ -1,0 +1,61 @@
+# The manifest of typescript.pipeline.kts: what the script runs with.
+#
+# Fixed values are the ones this pipeline brings: the upstream project and the commit it is fixed
+# at. Overridable values are the ones a run may set; every one has a safe public default. The
+# default profile is quick, and the default is not to publish or deploy anything: a run that wants
+# real-ci with a publication must declare the registry, the tag, the base image and the namespace,
+# and the script refuses before it builds anything when one of them is missing.
+#
+# The manifest names no template and no cluster: where the workers run is the operator's binding.
+metadata:
+  version: "1"
+  labels:
+    example: typescript
+    language: typescript
+  annotations:
+    upstream: nestjs/typescript-starter
+    upstream-commit: 3096ee7ccefed9afab2835f903ea9ad0956d62c5
+    license: MIT declared in package.json; the upstream ships no LICENSE file at the pinned commit
+spec:
+  requirements:
+    cpu: 2.0
+    memoryMb: 4096
+  env:
+    TS_SOURCE_URL: https://github.com/nestjs/typescript-starter.git
+    TS_SOURCE_COMMIT: 3096ee7ccefed9afab2835f903ea9ad0956d62c5
+    TS_APP_PORT: "3000"
+    TS_STAGING_SERVICE: typescript-staging
+  overridable:
+    TS_PROFILE:
+      default: quick
+      description: "quick runs the quality gate, the build and the unit suite; developer adds the e2e suite and the coverage; real-ci runs every stage"
+    TS_COVERAGE_MIN:
+      default: "60"
+      description: "the floor of line coverage, in whole percent, that a developer or real-ci run accepts"
+    TS_WORK_DIR:
+      default: typescript-work
+      description: "the directory the build happens in; use an absolute path on a worker whose scratch is memory"
+    TS_PUBLISH:
+      default: "false"
+      description: "true publishes the image and deploys it to staging; only real-ci honours it"
+    TS_REGISTRY_INSECURE:
+      default: "false"
+      description: "true lets crane talk plain HTTP to the registry; leave false for a TLS registry"
+    TS_PUSH_REGISTRY:
+      default: ""
+      description: "the registry the image is pushed to; required when publishing"
+    TS_PULL_REGISTRY:
+      default: ""
+      description: "the registry address the cluster pulls the image from; required when publishing"
+    TS_IMAGE_REPOSITORY:
+      default: typescript-starter
+      description: "the repository the image is pushed to inside the registry"
+    TS_IMAGE_TAG:
+      default: ""
+      description: "the tag the image is pushed under; the deployment names the digest, not the tag. Required when publishing"
+    TS_BASE_IMAGE:
+      default: ""
+      description: "an image with the node runtime (e.g. docker.io/library/node:24-slim) that the app layer is appended to; required when publishing"
+    TS_STAGING_NAMESPACE:
+      default: ""
+      description: "the namespace of the temporary staging; required when publishing. The credential typescript-staging-kubeconfig must be registered"
