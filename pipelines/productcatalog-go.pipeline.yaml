@@ -1,0 +1,72 @@
+# The manifest of productcatalog-go.pipeline.kts: what the script runs with.
+#
+# The upstream is GoogleCloudPlatform/microservices-demo, licensed Apache-2.0 — compatible with
+# this examples repository, and the pipeline only reads its source: the bounded slice is
+# src/productcatalogservice, one self-contained Go service.
+#
+# Fixed values are the ones this pipeline brings: the upstream project, the commit it is fixed at,
+# the slice inside it, and the host Go toolchain version the quick-profile evidence was measured
+# with. Overridable values are the ones a run may set; every one has a safe public default. The
+# default profile is quick, and the default is not to publish or deploy anything: a run that wants
+# real-ci with a publication must declare the registries, the tag and the namespace, and the script
+# refuses before it builds anything when one of them is missing.
+#
+# GO_OCI_TOOLCHAIN_IMAGE is the opt-in container path: real-ci rebuilds the slice inside it only
+# when it is named by digest (@sha256), and it says NOT_RUN with the reason otherwise. The quick
+# profile pulls no container image at all.
+#
+# The manifest names no template and no cluster: where the workers run is the operator's binding.
+metadata:
+  version: "1"
+  labels:
+    example: productcatalog-go
+    language: go
+  annotations:
+    upstream: GoogleCloudPlatform/microservices-demo
+    upstream-commit: c7cb6d5bfd6ea3aed768634ebbcb98cb7a523712
+    slice: src/productcatalogservice
+    license: Apache-2.0
+spec:
+  requirements:
+    cpu: 2.0
+    memoryMb: 4096
+  env:
+    GO_SOURCE_URL: https://github.com/GoogleCloudPlatform/microservices-demo.git
+    GO_SOURCE_COMMIT: c7cb6d5bfd6ea3aed768634ebbcb98cb7a523712
+    GO_SERVICE_DIR: src/productcatalogservice
+    GO_APP_PORT: "3550"
+    GO_STAGING_SERVICE: productcatalog-go-staging
+  overridable:
+    GO_PROFILE:
+      default: quick
+      description: "quick runs the build and vet gate and the unit suite; developer adds the race detector and the coverage floor; real-ci runs every stage"
+    GO_WORK_DIR:
+      default: productcatalog-go-work
+      description: "the directory the build happens in; use an absolute path on a worker whose scratch is memory"
+    GO_TOOLCHAIN_VERSION:
+      default: "1.27.4"
+      description: "the Go version the quick evidence was measured with; the quality stage refuses any other compiler. Override deliberately, when the reference moves to a new toolchain"
+    GO_COVERAGE_MIN:
+      default: "10"
+      description: "the floor of statement coverage, in whole percent, over the service package (genproto is generated and excluded from the floor)"
+    GO_PUBLISH:
+      default: "false"
+      description: "true publishes the image and deploys it to staging; only real-ci honours it"
+    GO_PUSH_REGISTRY:
+      default: ""
+      description: "the registry the image is pushed to; required when publishing"
+    GO_PULL_REGISTRY:
+      default: ""
+      description: "the registry address the cluster pulls the image from; required when publishing"
+    GO_IMAGE_REPOSITORY:
+      default: productcatalogservice
+      description: "the repository the image is pushed to inside the registry"
+    GO_IMAGE_TAG:
+      default: ""
+      description: "the tag the image is pushed under; the deployment names the digest, not the tag. Required when publishing"
+    GO_OCI_TOOLCHAIN_IMAGE:
+      default: ""
+      description: "the Go toolchain image, pinned by @sha256 digest, that the real-ci containers stage rebuilds the slice inside; empty or tag-named reports NOT_RUN with the reason"
+    GO_STAGING_NAMESPACE:
+      default: ""
+      description: "the namespace of the temporary staging; required when publishing. The credential productcatalog-go-staging-kubeconfig must be registered"
