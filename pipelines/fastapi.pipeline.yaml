@@ -1,0 +1,70 @@
+# The manifest of fastapi.pipeline.kts: what the script runs with.
+#
+# Fixed values are the ones this pipeline brings: the upstream project and the commit it is fixed
+# at. Overridable values are the ones a run may set; every one has a safe public default. The
+# default profile is quick, and the default is not to publish or deploy anything: a run that wants
+# real-ci with a publication must declare the registries, the tag and the namespace, and the script
+# refuses before it builds anything when one of them is missing.
+#
+# The application settings (the secret key, the superuser, the database URL) are test scaffolding:
+# safe public defaults, never real credentials. A run that points FASTAPI_DATABASE_URL at a real
+# database is responsible for the credentials that URL carries.
+#
+# The manifest names no template and no cluster: where the workers run is the operator's binding.
+metadata:
+  version: "1"
+  labels:
+    example: fastapi
+    language: python
+  annotations:
+    upstream: fastapi/full-stack-fastapi-template
+    upstream-commit: aabb90126964a164e02aff39e7c385bb0598236d
+    certification: PKH-042 owns the full credential-backed certification; it consumes this canonical reference
+spec:
+  requirements:
+    cpu: 2.0
+    memoryMb: 4096
+  env:
+    FASTAPI_SOURCE_URL: https://github.com/fastapi/full-stack-fastapi-template.git
+    FASTAPI_SOURCE_COMMIT: aabb90126964a164e02aff39e7c385bb0598236d
+    FASTAPI_APP_PORT: "8000"
+    FASTAPI_STAGING_SERVICE: fastapi-staging
+    FASTAPI_PROJECT_NAME: Full Stack FastAPI Example
+    FASTAPI_FIRST_SUPERUSER: admin@example.com
+  overridable:
+    FASTAPI_PROFILE:
+      default: quick
+      description: "quick runs the quality gate and the no-DB unit tests; developer adds the database-backed suite and the migrations; real-ci runs every stage"
+    FASTAPI_COVERAGE_MIN:
+      default: "60"
+      description: "the floor of line coverage, in whole percent, that a real-ci run accepts"
+    FASTAPI_WORK_DIR:
+      default: fastapi-work
+      description: "the directory the build happens in; use an absolute path on a worker whose scratch is memory"
+    FASTAPI_PUBLISH:
+      default: "false"
+      description: "true publishes the image and deploys it to staging; only real-ci honours it"
+    FASTAPI_PUSH_REGISTRY:
+      default: ""
+      description: "the registry the image is pushed to; required when publishing"
+    FASTAPI_PULL_REGISTRY:
+      default: ""
+      description: "the registry address the cluster pulls the image from; required when publishing"
+    FASTAPI_IMAGE_REPOSITORY:
+      default: fastapi-full-stack
+      description: "the repository the image is pushed to inside the registry"
+    FASTAPI_IMAGE_TAG:
+      default: ""
+      description: "the tag the image is pushed under; the deployment names the digest, not the tag. Required when publishing"
+    FASTAPI_STAGING_NAMESPACE:
+      default: ""
+      description: "the namespace of the temporary staging; required when publishing. The credential fastapi-staging-kubeconfig must be registered"
+    FASTAPI_DATABASE_URL:
+      default: postgresql://postgres:postgres@localhost:5432/app
+      description: "the PostgreSQL the database-backed stages probe and use; integration, migrations and coverage report NOT_RUN when nothing listens there"
+    FASTAPI_SECRET_KEY:
+      default: reference-test-secret-key-not-a-real-secret
+      description: "the JWT signing key of the test run: scaffolding, not a credential; override it for any run against real infrastructure"
+    FASTAPI_FIRST_SUPERUSER_PASSWORD:
+      default: reference-test-password
+      description: "the superuser password of the test run: scaffolding, not a credential; override it for any run against real infrastructure"
