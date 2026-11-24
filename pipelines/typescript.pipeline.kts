@@ -309,7 +309,7 @@ pipeline {
                     sleep 1
                   done
                   "${'$'}engine" rm -f "${'$'}cid" > /dev/null
-                  case "${'$'}(cat "${'$'}TS_WORK_DIR/containers.response") in
+                  case "${'$'}(cat "${'$'}TS_WORK_DIR/containers.response")" in
                     *"Hello World!"*) echo containers-suite=RAN ;;
                     *) echo "the container answered without the greeting of the application" >&2; exit 1 ;;
                   esac
