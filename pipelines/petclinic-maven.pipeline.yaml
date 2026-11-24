@@ -1,0 +1,60 @@
+# The manifest of petclinic-maven.pipeline.kts: what the script runs with.
+#
+# Fixed values are the ones this pipeline brings: the upstream project and the commit it is fixed
+# at. Overridable values are the ones a run may set; every one has a safe public default. The
+# default profile is quick, and the default is not to publish or deploy anything: a run that wants
+# real-ci with a publication must declare the registry, the tag, the base image and the namespace,
+# and the script refuses before it builds anything when one of them is missing.
+#
+# The manifest names no template and no cluster: where the workers run is the operator's binding.
+metadata:
+  version: "1"
+  labels:
+    example: petclinic-maven
+    language: java
+  annotations:
+    upstream: spring-projects/spring-petclinic
+    upstream-commit: 500158f732419217507c7656904b8e6aa1bcc0d6
+spec:
+  requirements:
+    cpu: 2.0
+    memoryMb: 4096
+  env:
+    PETCLINIC_SOURCE_URL: https://github.com/spring-projects/spring-petclinic.git
+    PETCLINIC_SOURCE_COMMIT: 500158f732419217507c7656904b8e6aa1bcc0d6
+    PETCLINIC_APP_PORT: "8080"
+    PETCLINIC_STAGING_SERVICE: petclinic-staging
+  overridable:
+    PETCLINIC_PROFILE:
+      default: quick
+      description: "quick runs the quality gate and the unit suite; developer adds the integration suite; real-ci runs every stage"
+    PETCLINIC_COVERAGE_MIN:
+      default: "60"
+      description: "the floor of line coverage, in whole percent, that a real-ci run accepts"
+    PETCLINIC_WORK_DIR:
+      default: petclinic-work
+      description: "the directory the build happens in; use an absolute path on a worker whose scratch is memory"
+    PETCLINIC_PUBLISH:
+      default: "false"
+      description: "true publishes the image and deploys it to staging; only real-ci honours it"
+    PETCLINIC_REGISTRY_INSECURE:
+      default: "false"
+      description: "true lets crane talk plain HTTP to the registry; leave false for a TLS registry"
+    PETCLINIC_PUSH_REGISTRY:
+      default: ""
+      description: "the registry the image is pushed to; required when publishing"
+    PETCLINIC_PULL_REGISTRY:
+      default: ""
+      description: "the registry address the cluster pulls the image from; required when publishing"
+    PETCLINIC_IMAGE_REPOSITORY:
+      default: petclinic
+      description: "the repository the image is pushed to inside the registry"
+    PETCLINIC_IMAGE_TAG:
+      default: ""
+      description: "the tag the image is pushed under; the deployment names the digest, not the tag. Required when publishing"
+    PETCLINIC_BASE_IMAGE:
+      default: ""
+      description: "the base image the application layer is appended to; required when publishing"
+    PETCLINIC_STAGING_NAMESPACE:
+      default: ""
+      description: "the namespace of the temporary staging; required when publishing. The credential petclinic-staging-kubeconfig must be registered"
