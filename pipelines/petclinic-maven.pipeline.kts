@@ -17,6 +17,20 @@
 // `PETCLINIC_PUBLISH=true`. Then every value the publication needs must be declared, and a missing
 // one refuses the run before anything is built.
 //
+// **The JUnit XML is published even when the suite fails.** Maven surefire writes its real reports
+// at `target/surefire-reports/TEST-*.xml` whatever the verdict, and each test stage copies them —
+// green or red — into `junit-reports/<suite>/` at the workspace root. The next step archives them
+// with `archiveArtifacts` as ordinary artifacts, and a last step replays the failure verdict carried
+// in `junit-reports/<suite>/verdict`. A suite the profile does not run stages no XML and reports
+// NOT_RUN: publication never invents a result, and the application JAR stays an ordinary artifact
+// of the package stage, judged exactly as before.
+//
+// **Punto de contacto — `core.junit.publishReports`.** The runtime installed today (0.97.0) has no
+// JUnit publication step, so the example stages → archives → replays the verdict by hand. When
+// pipeline-kotlin ships that step (PR #474: verify every selected file parses as junit-xml, capture
+// through the run's archive port, a no-match is never a pass), replace the dance in the test stages
+// with one publication declaration over the same `junit-reports/<suite>/*.xml` pattern.
+//
 // Run: pipelinek run petclinic-maven.pipeline.kts (with the manifest's values in the environment)
 
 pipeline {
@@ -159,83 +173,156 @@ pipeline {
             sh(stageOrSkip("unit", """
                 set -eu
                 . ${shellQuoted("$workDir/env.sh")}
+                workspace="${'$'}PWD"
                 cd "${'$'}PETCLINIC_WORK_DIR/project"
-                if ! ./mvnw -B -Dmaven.repo.local="${'$'}PETCLINIC_WORK_DIR/m2" test -Dtest="!*IntegrationTests" -DfailIfNoTests=false > "${'$'}PETCLINIC_WORK_DIR/unit.log" 2>&1; then
+                mkdir -p "${'$'}PETCLINIC_WORK_DIR/reports/unit" "${'$'}workspace/junit-reports/unit"
+                # (1) The suite runs; surefire leaves its TEST-*.xml reports even when tests fail.
+                suite_status=0
+                ./mvnw -B -Dmaven.repo.local="${'$'}PETCLINIC_WORK_DIR/m2" test -Dtest="!*IntegrationTests" -DfailIfNoTests=false > "${'$'}PETCLINIC_WORK_DIR/unit.log" 2>&1 || suite_status=${'$'}?
+                # (2) The real XML is staged before the verdict is read: publication first.
+                for report in "${'$'}PETCLINIC_WORK_DIR/project"/target/surefire-reports/TEST-*.xml; do
+                  if [ -f "${'$'}report" ]; then
+                    cp "${'$'}report" "${'$'}PETCLINIC_WORK_DIR/reports/unit/"
+                    cp "${'$'}report" "${'$'}workspace/junit-reports/unit/"
+                  fi
+                done
+                ls "${'$'}workspace/junit-reports/unit"/*.xml >/dev/null 2>&1 && echo junit-report=junit-reports/unit/
+                # (3) The verdict goes to a marker; the last step of the stage replays it.
+                verdict=${'$'}suite_status
+                if [ "${'$'}suite_status" != "0" ]; then
                   tail -40 "${'$'}PETCLINIC_WORK_DIR/unit.log"
+                elif summary=${'$'}(sh "${'$'}PETCLINIC_WORK_DIR/summary.sh" "${'$'}PETCLINIC_WORK_DIR/unit.log" 2>/dev/null); then
+                  set -- ${'$'}summary
+                  echo unit-tests=${'$'}1 unit-failures=${'$'}2 unit-errors=${'$'}3 unit-skipped=${'$'}4
+                  if [ "${'$'}2" != "0" ] || [ "${'$'}3" != "0" ] || [ "${'$'}1" = "0" ]; then
+                    verdict=1
+                  fi
+                else
+                  verdict=1
+                fi
+                echo "${'$'}verdict" > "${'$'}workspace/junit-reports/unit/verdict"
+            """.trimIndent()))
+            if (reasonToSkip("unit") == null) archiveArtifacts("junit-reports/unit/*.xml")
+            sh(stageOrSkip("unit", """
+                set -eu
+                verdict=${'$'}(cat "junit-reports/unit/verdict" 2>/dev/null || echo no-verdict)
+                if [ "${'$'}verdict" = "no-verdict" ]; then
+                  echo "the unit suite left no verdict: the stage broke before publication" >&2
                   exit 1
                 fi
-                summary=${'$'}(sh "${'$'}PETCLINIC_WORK_DIR/summary.sh" "${'$'}PETCLINIC_WORK_DIR/unit.log")
-                set -- ${'$'}summary
-                echo unit-tests=${'$'}1 unit-failures=${'$'}2 unit-errors=${'$'}3 unit-skipped=${'$'}4
-                if [ "${'$'}2" != "0" ] || [ "${'$'}3" != "0" ]; then
-                  echo "the unit suite failed" >&2
+                if [ "${'$'}verdict" != "0" ]; then
+                  echo "the unit suite failed: its real XML is published at junit-reports/unit/" >&2
                   exit 1
                 fi
-                if [ "${'$'}1" = "0" ]; then
-                  echo "the unit suite ran no test at all" >&2
-                  exit 1
-                fi
-                mkdir -p "${'$'}PETCLINIC_WORK_DIR/reports/unit"
-                cp "${'$'}PETCLINIC_WORK_DIR/project"/target/surefire-reports/TEST-*.xml "${'$'}PETCLINIC_WORK_DIR/reports/unit/"
+                echo unit=ok
             """.trimIndent()))
         }
         stage("integration") {
             sh(stageOrSkip("integration", """
                 set -eu
                 . ${shellQuoted("$workDir/env.sh")}
+                workspace="${'$'}PWD"
                 cd "${'$'}PETCLINIC_WORK_DIR/project"
-                if ! ./mvnw -B -Dmaven.repo.local="${'$'}PETCLINIC_WORK_DIR/m2" test -Dtest="PetClinicIntegrationTests,CrashControllerIntegrationTests" -DfailIfNoTests=false > "${'$'}PETCLINIC_WORK_DIR/integration.log" 2>&1; then
+                mkdir -p "${'$'}PETCLINIC_WORK_DIR/reports/integration" "${'$'}workspace/junit-reports/integration"
+                suite_status=0
+                ./mvnw -B -Dmaven.repo.local="${'$'}PETCLINIC_WORK_DIR/m2" test -Dtest="PetClinicIntegrationTests,CrashControllerIntegrationTests" -DfailIfNoTests=false > "${'$'}PETCLINIC_WORK_DIR/integration.log" 2>&1 || suite_status=${'$'}?
+                for report in "${'$'}PETCLINIC_WORK_DIR/project"/target/surefire-reports/TEST-*.xml; do
+                  if [ -f "${'$'}report" ]; then
+                    cp "${'$'}report" "${'$'}PETCLINIC_WORK_DIR/reports/integration/"
+                    cp "${'$'}report" "${'$'}workspace/junit-reports/integration/"
+                  fi
+                done
+                ls "${'$'}workspace/junit-reports/integration"/*.xml >/dev/null 2>&1 && echo junit-report=junit-reports/integration/
+                verdict=${'$'}suite_status
+                if [ "${'$'}suite_status" != "0" ]; then
                   tail -40 "${'$'}PETCLINIC_WORK_DIR/integration.log"
+                elif summary=${'$'}(sh "${'$'}PETCLINIC_WORK_DIR/summary.sh" "${'$'}PETCLINIC_WORK_DIR/integration.log" 2>/dev/null); then
+                  set -- ${'$'}summary
+                  echo integration-tests=${'$'}1 integration-failures=${'$'}2 integration-errors=${'$'}3 integration-skipped=${'$'}4
+                  if [ "${'$'}2" != "0" ] || [ "${'$'}3" != "0" ] || [ "${'$'}1" = "0" ]; then
+                    verdict=1
+                  fi
+                else
+                  verdict=1
+                fi
+                echo "${'$'}verdict" > "${'$'}workspace/junit-reports/integration/verdict"
+            """.trimIndent()))
+            if (reasonToSkip("integration") == null) archiveArtifacts("junit-reports/integration/*.xml")
+            sh(stageOrSkip("integration", """
+                set -eu
+                verdict=${'$'}(cat "junit-reports/integration/verdict" 2>/dev/null || echo no-verdict)
+                if [ "${'$'}verdict" = "no-verdict" ]; then
+                  echo "the integration suite left no verdict: the stage broke before publication" >&2
                   exit 1
                 fi
-                summary=${'$'}(sh "${'$'}PETCLINIC_WORK_DIR/summary.sh" "${'$'}PETCLINIC_WORK_DIR/integration.log")
-                set -- ${'$'}summary
-                echo integration-tests=${'$'}1 integration-failures=${'$'}2 integration-errors=${'$'}3 integration-skipped=${'$'}4
-                if [ "${'$'}2" != "0" ] || [ "${'$'}3" != "0" ]; then
-                  echo "the integration suite failed" >&2
+                if [ "${'$'}verdict" != "0" ]; then
+                  echo "the integration suite failed: its real XML is published at junit-reports/integration/" >&2
                   exit 1
                 fi
-                if [ "${'$'}1" = "0" ]; then
-                  echo "the integration suite ran no test at all" >&2
-                  exit 1
-                fi
-                mkdir -p "${'$'}PETCLINIC_WORK_DIR/reports/integration"
-                cp "${'$'}PETCLINIC_WORK_DIR/project"/target/surefire-reports/TEST-*.xml "${'$'}PETCLINIC_WORK_DIR/reports/integration/"
+                echo integration=ok
             """.trimIndent()))
         }
         stage("containers") {
             sh(stageOrSkip("containers", """
                 set -eu
                 . ${shellQuoted("$workDir/env.sh")}
+                workspace="${'$'}PWD"
                 cd "${'$'}PETCLINIC_WORK_DIR/project"
+                mkdir -p "${'$'}PETCLINIC_WORK_DIR/reports/containers" "${'$'}workspace/junit-reports/containers"
                 status=0
                 ./mvnw -B -Dmaven.repo.local="${'$'}PETCLINIC_WORK_DIR/m2" test -Dtest="MySqlIntegrationTests" -DfailIfNoTests=false > "${'$'}PETCLINIC_WORK_DIR/containers.log" 2>&1 || status=${'$'}?
+                # The real XML surefire wrote is staged before any verdict, green or red alike.
+                for report in "${'$'}PETCLINIC_WORK_DIR/project"/target/surefire-reports/TEST-*.xml; do
+                  if [ -f "${'$'}report" ]; then
+                    cp "${'$'}report" "${'$'}PETCLINIC_WORK_DIR/reports/containers/"
+                    cp "${'$'}report" "${'$'}workspace/junit-reports/containers/"
+                  fi
+                done
+                ls "${'$'}workspace/junit-reports/containers"/*.xml >/dev/null 2>&1 && echo junit-report=junit-reports/containers/
+                verdict=0
                 if grep -q "Could not find a valid Docker environment" "${'$'}PETCLINIC_WORK_DIR/containers.log"; then
                   suite=NOT_RUN
                   reason=no-container-engine
                 elif [ "${'$'}status" != "0" ]; then
                   tail -40 "${'$'}PETCLINIC_WORK_DIR/containers.log"
-                  echo "the suite of the containers failed" >&2
-                  exit 1
-                else
-                  summary=${'$'}(sh "${'$'}PETCLINIC_WORK_DIR/summary.sh" "${'$'}PETCLINIC_WORK_DIR/containers.log")
+                  verdict=1
+                  suite=FAILED
+                  reason=suite-failed
+                elif summary=${'$'}(sh "${'$'}PETCLINIC_WORK_DIR/summary.sh" "${'$'}PETCLINIC_WORK_DIR/containers.log" 2>/dev/null); then
                   set -- ${'$'}summary
                   echo containers-tests=${'$'}1 containers-failures=${'$'}2 containers-errors=${'$'}3 containers-skipped=${'$'}4
                   if [ "${'$'}2" != "0" ] || [ "${'$'}3" != "0" ]; then
-                    echo "the suite of the containers failed" >&2
-                    exit 1
-                  fi
-                  if [ "${'$'}4" = "${'$'}1" ] && [ "${'$'}1" != "0" ]; then
+                    verdict=1
+                    suite=FAILED
+                    reason=suite-failed
+                  elif [ "${'$'}4" = "${'$'}1" ] && [ "${'$'}1" != "0" ]; then
                     suite=NOT_RUN
                     reason=the-suite-skipped-its-tests
                   else
                     suite=RAN
                     reason=none
                   fi
+                else
+                  verdict=1
+                  suite=FAILED
+                  reason=no-summary-in-log
                 fi
                 echo containers-suite="${'$'}suite" containers-reason="${'$'}reason"
-                mkdir -p "${'$'}PETCLINIC_WORK_DIR/reports/containers"
-                cp "${'$'}PETCLINIC_WORK_DIR/project"/target/surefire-reports/TEST-*.xml "${'$'}PETCLINIC_WORK_DIR/reports/containers/"
+                echo "${'$'}verdict" > "${'$'}workspace/junit-reports/containers/verdict"
+            """.trimIndent()))
+            if (reasonToSkip("containers") == null) archiveArtifacts("junit-reports/containers/*.xml", allowEmptyArchive = true)
+            sh(stageOrSkip("containers", """
+                set -eu
+                verdict=${'$'}(cat "junit-reports/containers/verdict" 2>/dev/null || echo no-verdict)
+                if [ "${'$'}verdict" = "no-verdict" ]; then
+                  echo "the containers suite left no verdict: the stage broke before publication" >&2
+                  exit 1
+                fi
+                if [ "${'$'}verdict" != "0" ]; then
+                  echo "the suite of the containers failed: its real XML is published at junit-reports/containers/" >&2
+                  exit 1
+                fi
+                echo containers=ok
             """.trimIndent()))
         }
         stage("package") {

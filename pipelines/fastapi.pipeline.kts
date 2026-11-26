@@ -34,6 +34,22 @@
 // credentials — lives in PKH-042, and that card consumes this canonical reference rather than
 // another hand copy. Do not grow a second copy of that evidence here.
 //
+// **The JUnit XML is published even when the suite fails.** Every suite below writes its real
+// report with the tool's own switch — pytest `--junitxml=$FASTAPI_WORK_DIR/reports/<suite>/junit.xml`
+// — and the stage copies that file, written whether the run was green or red, into
+// `junit-reports/<suite>/` at the workspace root. The next step archives it with `archiveArtifacts`
+// as an ordinary artifact, and only then does a last step replay the failure verdict carried in
+// `junit-reports/<suite>/verdict`. A suite the profile or the environment did not run stages no
+// XML and reports NOT_RUN: publication never invents a result, and the JARs and wheels of the
+// package stage remain ordinary artifacts, unaffected by any of this.
+//
+// **Punto de contacto — `core.junit.publishReports`.** The runtime installed today (0.97.0) has
+// no JUnit publication step, so the examples stage → archive → verdict by hand. When pipeline-kotlin
+// ships that step (PR #474: the declaration verifies every selected file parses as junit-xml and
+// captures it through the run's archive port; a glob that matched nothing is never a pass), replace
+// the stage → archive → replay dance of the test stages with a single publication declaration over
+// the same `junit-reports/<suite>/` pattern. This comment is the one contact point per example.
+//
 // Run: pipelinek run fastapi.pipeline.kts (with the manifest's values in the environment)
 
 pipeline {
@@ -289,30 +305,53 @@ pipeline {
                 def test_password_reset_token_rejects_garbage() -> None:
                     assert verify_password_reset_token("not-a-jwt") is None
                 TESTS
+                workspace="${'$'}PWD"
                 cd "${'$'}FASTAPI_WORK_DIR/project/backend"
                 APP_ENV_EXPORTS
-                mkdir -p "${'$'}FASTAPI_WORK_DIR/reports/unit"
-                if ! uv run python -m pytest -p no:cacheprovider --junitxml="${'$'}FASTAPI_WORK_DIR/reports/unit/junit.xml" "${'$'}FASTAPI_WORK_DIR/nodb-tests" > "${'$'}FASTAPI_WORK_DIR/unit.log" 2>&1; then
+                mkdir -p "${'$'}FASTAPI_WORK_DIR/reports/unit" "${'$'}workspace/junit-reports/unit"
+                # (1) The suite runs; a failing pytest still leaves its real junit.xml behind.
+                suite_status=0
+                uv run python -m pytest -p no:cacheprovider --junitxml="${'$'}FASTAPI_WORK_DIR/reports/unit/junit.xml" "${'$'}FASTAPI_WORK_DIR/nodb-tests" > "${'$'}FASTAPI_WORK_DIR/unit.log" 2>&1 || suite_status=${'$'}?
+                # (2) The real XML is staged before any verdict is read: publication first.
+                if [ -f "${'$'}FASTAPI_WORK_DIR/reports/unit/junit.xml" ]; then
+                  cp "${'$'}FASTAPI_WORK_DIR/reports/unit/junit.xml" "${'$'}workspace/junit-reports/unit/junit.xml"
+                  echo junit-report=junit-reports/unit/junit.xml
+                fi
+                # (3) The verdict goes to a marker; the last step of the stage replays it.
+                verdict=${'$'}suite_status
+                if [ "${'$'}suite_status" != "0" ]; then
                   tail -40 "${'$'}FASTAPI_WORK_DIR/unit.log"
-                  exit 1
+                elif summary=${'$'}(sh "${'$'}FASTAPI_WORK_DIR/summary.sh" "${'$'}FASTAPI_WORK_DIR/unit.log" 2>/dev/null); then
+                  set -- ${'$'}summary
+                  echo unit-tests=${'$'}1 unit-failures=${'$'}2 unit-errors=${'$'}3 unit-skipped=${'$'}4
+                  if [ "${'$'}2" != "0" ] || [ "${'$'}3" != "0" ] || [ "${'$'}1" = "0" ]; then
+                    verdict=1
+                  fi
+                else
+                  verdict=1
                 fi
-                summary=${'$'}(sh "${'$'}FASTAPI_WORK_DIR/summary.sh" "${'$'}FASTAPI_WORK_DIR/unit.log")
-                set -- ${'$'}summary
-                echo unit-tests=${'$'}1 unit-failures=${'$'}2 unit-errors=${'$'}3 unit-skipped=${'$'}4
-                if [ "${'$'}2" != "0" ] || [ "${'$'}3" != "0" ]; then
-                  echo "the unit suite failed" >&2
-                  exit 1
-                fi
-                if [ "${'$'}1" = "0" ]; then
-                  echo "the unit suite ran no test at all" >&2
-                  exit 1
-                fi
+                echo "${'$'}verdict" > "${'$'}workspace/junit-reports/unit/verdict"
             """.trimIndent())))
+            if (reasonToSkip("unit") == null) archiveArtifacts("junit-reports/unit/*.xml")
+            sh(stageOrSkip("unit", """
+                set -eu
+                verdict=${'$'}(cat "junit-reports/unit/verdict" 2>/dev/null || echo no-verdict)
+                if [ "${'$'}verdict" = "no-verdict" ]; then
+                  echo "the unit suite left no verdict: the stage broke before publication" >&2
+                  exit 1
+                fi
+                if [ "${'$'}verdict" != "0" ]; then
+                  echo "the unit suite failed: its real XML is published at junit-reports/unit/junit.xml" >&2
+                  exit 1
+                fi
+                echo unit=ok
+            """.trimIndent()))
         }
         stage("integration") {
             sh(stageOrSkip("integration", withFragments("""
                 set -eu
                 . ${shellQuoted("$workDir/env.sh")}
+                workspace="${'$'}PWD"
                 DB_IS_REACHABLE
                 if [ "${'$'}db_status" != "0" ]; then
                   echo integration=NOT_RUN reason=no-database-reachable
@@ -320,23 +359,41 @@ pipeline {
                 fi
                 cd "${'$'}FASTAPI_WORK_DIR/project/backend"
                 APP_ENV_EXPORTS
-                mkdir -p "${'$'}FASTAPI_WORK_DIR/reports/integration"
-                if ! uv run python -m pytest -p no:cacheprovider --junitxml="${'$'}FASTAPI_WORK_DIR/reports/integration/junit.xml" tests > "${'$'}FASTAPI_WORK_DIR/integration.log" 2>&1; then
+                mkdir -p "${'$'}FASTAPI_WORK_DIR/reports/integration" "${'$'}workspace/junit-reports/integration"
+                suite_status=0
+                uv run python -m pytest -p no:cacheprovider --junitxml="${'$'}FASTAPI_WORK_DIR/reports/integration/junit.xml" tests > "${'$'}FASTAPI_WORK_DIR/integration.log" 2>&1 || suite_status=${'$'}?
+                if [ -f "${'$'}FASTAPI_WORK_DIR/reports/integration/junit.xml" ]; then
+                  cp "${'$'}FASTAPI_WORK_DIR/reports/integration/junit.xml" "${'$'}workspace/junit-reports/integration/junit.xml"
+                  echo junit-report=junit-reports/integration/junit.xml
+                fi
+                verdict=${'$'}suite_status
+                if [ "${'$'}suite_status" != "0" ]; then
                   tail -40 "${'$'}FASTAPI_WORK_DIR/integration.log"
-                  exit 1
+                elif summary=${'$'}(sh "${'$'}FASTAPI_WORK_DIR/summary.sh" "${'$'}FASTAPI_WORK_DIR/integration.log" 2>/dev/null); then
+                  set -- ${'$'}summary
+                  echo integration-tests=${'$'}1 integration-failures=${'$'}2 integration-errors=${'$'}3 integration-skipped=${'$'}4
+                  if [ "${'$'}2" != "0" ] || [ "${'$'}3" != "0" ] || [ "${'$'}1" = "0" ]; then
+                    verdict=1
+                  fi
+                else
+                  verdict=1
                 fi
-                summary=${'$'}(sh "${'$'}FASTAPI_WORK_DIR/summary.sh" "${'$'}FASTAPI_WORK_DIR/integration.log")
-                set -- ${'$'}summary
-                echo integration-tests=${'$'}1 integration-failures=${'$'}2 integration-errors=${'$'}3 integration-skipped=${'$'}4
-                if [ "${'$'}2" != "0" ] || [ "${'$'}3" != "0" ]; then
-                  echo "the integration suite failed" >&2
-                  exit 1
-                fi
-                if [ "${'$'}1" = "0" ]; then
-                  echo "the integration suite ran no test at all" >&2
-                  exit 1
-                fi
+                echo "${'$'}verdict" > "${'$'}workspace/junit-reports/integration/verdict"
             """.trimIndent())))
+            if (reasonToSkip("integration") == null) archiveArtifacts("junit-reports/integration/*.xml", allowEmptyArchive = true)
+            sh(stageOrSkip("integration", """
+                set -eu
+                if [ ! -f "junit-reports/integration/verdict" ]; then
+                  echo integration=NOT_RUN reason=no-verdict-marker-not-run-or-skipped
+                  exit 0
+                fi
+                verdict=${'$'}(cat "junit-reports/integration/verdict")
+                if [ "${'$'}verdict" != "0" ]; then
+                  echo "the integration suite failed: its real XML is published at junit-reports/integration/junit.xml" >&2
+                  exit 1
+                fi
+                echo integration=ok
+            """.trimIndent()))
         }
         stage("migrations") {
             sh(stageOrSkip("migrations", withFragments("""

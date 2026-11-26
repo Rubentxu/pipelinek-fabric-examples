@@ -23,6 +23,19 @@
 // the published-shaped image, which is the assurance the in-process e2e (same code, no packaging)
 // does not give. The full auth-certification lives in the e2e cert front (PKH-267..271), not here.
 //
+// **The JUnit XML is published even when the suite fails.** Vitest writes its real report with its
+// own switches — `--reporter=junit --outputFile.junit=$TS_WORK_DIR/reports/<suite>/junit.xml` —
+// and each test stage copies that file, green or red, into `junit-reports/<suite>/` at the workspace
+// root. The next step archives it with `archiveArtifacts` as an ordinary artifact, and a last step
+// replays the failure verdict carried in `junit-reports/<suite>/verdict`. A suite the profile does
+// not run stages no XML and reports NOT_RUN: publication never invents a result.
+//
+// **Punto de contacto — `core.junit.publishReports`.** The runtime installed today (0.97.0) has no
+// JUnit publication step, so the example stages → archives → replays the verdict by hand. When
+// pipeline-kotlin ships that step (PR #474: verify every selected file parses as junit-xml, capture
+// through the run's archive port, a no-match is never a pass), replace the dance in the test stages
+// with one publication declaration over the same `junit-reports/<suite>/` pattern.
+//
 // Run: pipelinek run typescript.pipeline.kts (with the manifest's values in the environment)
 
 pipeline {
@@ -195,46 +208,87 @@ pipeline {
             sh(stageOrSkip("unit", """
                 set -eu
                 . ${shellQuoted("$workDir/env.sh")}
+                workspace="${'$'}PWD"
                 cd "${'$'}TS_WORK_DIR/project"
-                mkdir -p "${'$'}TS_WORK_DIR/reports/unit"
-                if ! npm run test -- --reporter=default --reporter=junit --outputFile.junit="${'$'}TS_WORK_DIR/reports/unit/junit.xml" > "${'$'}TS_WORK_DIR/unit.log" 2>&1; then
+                mkdir -p "${'$'}TS_WORK_DIR/reports/unit" "${'$'}workspace/junit-reports/unit"
+                # (1) The suite runs; a failing vitest still writes its junit reporter file.
+                suite_status=0
+                npm run test -- --reporter=default --reporter=junit --outputFile.junit="${'$'}TS_WORK_DIR/reports/unit/junit.xml" > "${'$'}TS_WORK_DIR/unit.log" 2>&1 || suite_status=${'$'}?
+                # (2) The real XML is staged before the verdict: publication first, result after.
+                if [ -f "${'$'}TS_WORK_DIR/reports/unit/junit.xml" ]; then
+                  cp "${'$'}TS_WORK_DIR/reports/unit/junit.xml" "${'$'}workspace/junit-reports/unit/junit.xml"
+                  echo junit-report=junit-reports/unit/junit.xml
+                fi
+                # (3) The verdict goes to a marker; the last step of the stage replays it.
+                verdict=${'$'}suite_status
+                if [ "${'$'}suite_status" != "0" ]; then
                   tail -40 "${'$'}TS_WORK_DIR/unit.log"
+                elif summary=${'$'}(sh "${'$'}TS_WORK_DIR/summary.sh" "${'$'}TS_WORK_DIR/unit.log" 2>/dev/null); then
+                  set -- ${'$'}summary
+                  echo unit-passed=${'$'}1 unit-failed=${'$'}2 unit-skipped=${'$'}3
+                  if [ "${'$'}2" != "0" ] || [ "${'$'}(( ${'$'}1 + ${'$'}2 ))" = "0" ]; then
+                    verdict=1
+                  fi
+                else
+                  verdict=1
+                fi
+                echo "${'$'}verdict" > "${'$'}workspace/junit-reports/unit/verdict"
+            """.trimIndent()))
+            if (reasonToSkip("unit") == null) archiveArtifacts("junit-reports/unit/*.xml")
+            sh(stageOrSkip("unit", """
+                set -eu
+                verdict=${'$'}(cat "junit-reports/unit/verdict" 2>/dev/null || echo no-verdict)
+                if [ "${'$'}verdict" = "no-verdict" ]; then
+                  echo "the unit suite left no verdict: the stage broke before publication" >&2
                   exit 1
                 fi
-                summary=${'$'}(sh "${'$'}TS_WORK_DIR/summary.sh" "${'$'}TS_WORK_DIR/unit.log")
-                set -- ${'$'}summary
-                echo unit-passed=${'$'}1 unit-failed=${'$'}2 unit-skipped=${'$'}3
-                if [ "${'$'}2" != "0" ]; then
-                  echo "the unit suite failed" >&2
+                if [ "${'$'}verdict" != "0" ]; then
+                  echo "the unit suite failed: its real XML is published at junit-reports/unit/junit.xml" >&2
                   exit 1
                 fi
-                if [ "${'$'}(( ${'$'}1 + ${'$'}2 ))" = "0" ]; then
-                  echo "the unit suite ran no test at all" >&2
-                  exit 1
-                fi
+                echo unit=ok
             """.trimIndent()))
         }
         stage("e2e") {
             sh(stageOrSkip("e2e", """
                 set -eu
                 . ${shellQuoted("$workDir/env.sh")}
+                workspace="${'$'}PWD"
                 cd "${'$'}TS_WORK_DIR/project"
-                mkdir -p "${'$'}TS_WORK_DIR/reports/e2e"
-                if ! npm run test:e2e -- --reporter=default --reporter=junit --outputFile.junit="${'$'}TS_WORK_DIR/reports/e2e/junit.xml" > "${'$'}TS_WORK_DIR/e2e.log" 2>&1; then
+                mkdir -p "${'$'}TS_WORK_DIR/reports/e2e" "${'$'}workspace/junit-reports/e2e"
+                suite_status=0
+                npm run test:e2e -- --reporter=default --reporter=junit --outputFile.junit="${'$'}TS_WORK_DIR/reports/e2e/junit.xml" > "${'$'}TS_WORK_DIR/e2e.log" 2>&1 || suite_status=${'$'}?
+                if [ -f "${'$'}TS_WORK_DIR/reports/e2e/junit.xml" ]; then
+                  cp "${'$'}TS_WORK_DIR/reports/e2e/junit.xml" "${'$'}workspace/junit-reports/e2e/junit.xml"
+                  echo junit-report=junit-reports/e2e/junit.xml
+                fi
+                verdict=${'$'}suite_status
+                if [ "${'$'}suite_status" != "0" ]; then
                   tail -40 "${'$'}TS_WORK_DIR/e2e.log"
+                elif summary=${'$'}(sh "${'$'}TS_WORK_DIR/summary.sh" "${'$'}TS_WORK_DIR/e2e.log" 2>/dev/null); then
+                  set -- ${'$'}summary
+                  echo e2e-passed=${'$'}1 e2e-failed=${'$'}2 e2e-skipped=${'$'}3
+                  if [ "${'$'}2" != "0" ] || [ "${'$'}(( ${'$'}1 + ${'$'}2 ))" = "0" ]; then
+                    verdict=1
+                  fi
+                else
+                  verdict=1
+                fi
+                echo "${'$'}verdict" > "${'$'}workspace/junit-reports/e2e/verdict"
+            """.trimIndent()))
+            if (reasonToSkip("e2e") == null) archiveArtifacts("junit-reports/e2e/*.xml")
+            sh(stageOrSkip("e2e", """
+                set -eu
+                verdict=${'$'}(cat "junit-reports/e2e/verdict" 2>/dev/null || echo no-verdict)
+                if [ "${'$'}verdict" = "no-verdict" ]; then
+                  echo "the e2e suite left no verdict: the stage broke before publication" >&2
                   exit 1
                 fi
-                summary=${'$'}(sh "${'$'}TS_WORK_DIR/summary.sh" "${'$'}TS_WORK_DIR/e2e.log")
-                set -- ${'$'}summary
-                echo e2e-passed=${'$'}1 e2e-failed=${'$'}2 e2e-skipped=${'$'}3
-                if [ "${'$'}2" != "0" ]; then
-                  echo "the suite of e2e failed" >&2
+                if [ "${'$'}verdict" != "0" ]; then
+                  echo "the suite of e2e failed: its real XML is published at junit-reports/e2e/junit.xml" >&2
                   exit 1
                 fi
-                if [ "${'$'}(( ${'$'}1 + ${'$'}2 ))" = "0" ]; then
-                  echo "the suite of e2e ran no test at all" >&2
-                  exit 1
-                fi
+                echo e2e=ok
             """.trimIndent()))
         }
         stage("coverage") {
