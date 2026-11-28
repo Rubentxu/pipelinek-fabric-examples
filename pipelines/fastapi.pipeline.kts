@@ -54,6 +54,13 @@
 // como siempre en este ejemplo. El SDK registrado por el runtime instalado (pipeline-kotlin
 // 0.97.0+, plugin oficial `junit` 0.1.0) es el que lo ejecuta.
 //
+// **Los bytes viajan por el carril de objetos, no por `archiveArtifacts` (PKH-378).** Un único
+// paso `publishJUnitReports("junit-reports/*/junit.xml", required = false)` en el `post { always }`
+// captura los informes por el puerto de archivo del run —sellado write-once por digest, parseado
+// desde la captura y no desde el fichero vivo—; el worker los sube al Fabric Core (spool → subida →
+// custodia) y la descarga posterior sólo sirve bytes cuyo SHA-256 coincide con el digest declarado.
+// La rueda, el SBOM y la cobertura quedan evidencia local nombrada por digest en la consola.
+//
 // Run: pipelinek run fastapi.pipeline.kts (with the manifest's values in the environment)
 
 import dev.rubentxu.pipeline.v2.sdk.junit.step.junitResults
@@ -515,7 +522,11 @@ pipeline {
                   echo artifact-coverage=${'$'}(sha256sum artifacts/coverage.xml | cut -d' ' -f1)
                 fi
             """.trimIndent()))
-            if (reasonToSkip("artifacts") == null) archiveArtifacts("artifacts/**")
+            // No `archiveArtifacts` here (PKH-378): the junit reports are published to the object
+            // lane by the ONE `publishJUnitReports` declaration in the `post` block below, and the
+            // wheel, SBOM and coverage files stay workspace evidence whose digests the console
+            // names. The worker carries the declared reports to the Fabric Core; no step writes to
+            // a controller's disk.
         }
         stage("publish") {
             // No `--insecure` flag beside crane's in PetClinic: docker's TLS policy for a registry is
@@ -630,6 +641,22 @@ pipeline {
                     """.trimIndent())
                 }
             }
+        }
+    }
+
+    post {
+        always {
+            // The object-lane publication of the real JUnit reports (PKH-378). The step is
+            // `core.junit.publishReports`: it captures the selected reports through the run's
+            // archive port FIRST — write-once bytes sealed at their digest address — and parses
+            // the CAPTURE, never the workspace file again, so the receipt's digest and size are
+            // read back from the store. The worker then carries every captured file to the Fabric
+            // Core over the object lane (spool → upload → custody), and a later download is served
+            // only when its bytes hash to the digest the receipt declared. `required = false` keeps
+            // an absent selection an ABSENT verdict, never a pass invented from nothing; the
+            // zero-test report of a suite the environment could not run parses whole and says
+            // nothing ran. It is a `post` step so a failed suite never costs the publication.
+            publishJUnitReports("junit-reports/*/junit.xml", required = false)
         }
     }
 }

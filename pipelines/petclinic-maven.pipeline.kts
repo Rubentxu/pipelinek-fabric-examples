@@ -35,6 +35,16 @@
 // dictando el replay, como siempre en estos ejemplos. El SDK registrado por el runtime instalado
 // (pipeline-kotlin 0.97.0+, plugin oficial `junit` 0.1.0) es el que lo ejecuta.
 //
+// **Los bytes viajan por el carril de objetos, no por `archiveArtifacts` (PKH-378).** Un único paso
+// `publishJUnitReports("junit-reports/*/junit.xml", required = false)` en el `post { always }` captura
+// los informes por el puerto de archivo del run —sellado write-once por digest, parseado desde la
+// captura y no desde el fichero vivo—; el worker los sube al Fabric Core (spool → subida → custodia)
+// y la descarga posterior sólo sirve bytes cuyo SHA-256 coincide con el digest que el recibo declaró.
+// El ejemplo no llama a `archiveArtifacts`: quien publica es el worker por el carril, y la verificación
+// de la descarga se mide sobre el controlador real (lista de artefactos con digest, bytes servidos
+// sólo si cuadran). Los JARs, el SBOM y el informe de cobertura siguen siendo evidencia local del run,
+// nombrada por digest en la consola.
+//
 // Run: pipelinek run petclinic-maven.pipeline.kts (with the manifest's values in the environment)
 
 import dev.rubentxu.pipeline.v2.sdk.junit.step.junitResults
@@ -410,7 +420,11 @@ pipeline {
                 echo artifact-jacoco=${'$'}(sha256sum artifacts/jacoco.xml | cut -d' ' -f1)
                 echo artifact-sbom=${'$'}(sha256sum artifacts/bom.json | cut -d' ' -f1)
             """.trimIndent()))
-            if (reasonToSkip("artifacts") == null) archiveArtifacts("artifacts/**")
+            // No `archiveArtifacts` here (PKH-378): the surefire XMLs the stage copies are published
+            // to the object lane by the ONE `publishJUnitReports` declaration in the `post` block
+            // below, and the coverage and SBOM files stay workspace evidence whose digests the console
+            // names. The lane's publication replaces the Jenkins archive: it is the worker who carries
+            // the declared reports to the Fabric Core, not a step that writes to a controller's disk.
         }
         stage("publish") {
             sh(stageOrSkip("publish", """
@@ -531,6 +545,23 @@ pipeline {
                     """.trimIndent())
                 }
             }
+        }
+    }
+
+    post {
+        always {
+            // The object-lane publication of the real JUnit reports (PKH-378). The step is
+            // `core.junit.publishReports`: it captures the selected reports through the run's
+            // archive port FIRST — write-once bytes sealed at their digest address — and parses
+            // the CAPTURE, never the workspace file again, so the receipt's digest and size are
+            // read back from the store. The worker then carries every captured file to the Fabric
+            // Core over the object lane (spool → upload → custody), and a later download is served
+            // only when its bytes hash to the digest the receipt declared. `required = false` keeps
+            // an absent selection an ABSENT verdict, never a pass invented from nothing: a profile
+            // that ran no suite publishes no report. It is a `post` step so a failed suite never
+            // costs the publication — the red suite's real XML reaches the lane and the replayed
+            // verdict still reddens the run.
+            publishJUnitReports("junit-reports/*/junit.xml", required = false)
         }
     }
 }
