@@ -37,20 +37,26 @@
 // **The JUnit XML is published even when the suite fails.** Every suite below writes its real
 // report with the tool's own switch — pytest `--junitxml=$FASTAPI_WORK_DIR/reports/<suite>/junit.xml`
 // — and the stage copies that file, written whether the run was green or red, into
-// `junit-reports/<suite>/` at the workspace root. The next step archives it with `archiveArtifacts`
-// as an ordinary artifact, and only then does a last step replay the failure verdict carried in
-// `junit-reports/<suite>/verdict`. A suite the profile or the environment did not run stages no
-// XML and reports NOT_RUN: publication never invents a result, and the JARs and wheels of the
-// package stage remain ordinary artifacts, unaffected by any of this.
+// `junit-reports/<suite>/junit.xml` at the workspace root. The next step publishes it with the
+// SDK's `junit.results` (`junitResults(...)`): the step reads THE declared path — publication no
+// longer depends on the `*.xml` name glob — parses the report, and records its declared totals as
+// a typed receipt; a report that is missing or is not junit-xml never passes. Only then does a
+// last step replay the failure verdict carried in `junit-reports/<suite>/verdict`, which remains
+// the sole judge of the stage. A suite the profile did not run stages no XML and reports NOT_RUN;
+// a suite the environment did not run (integration without a reachable database) stages an
+// explicit zero-test report: the receipt says nothing ran, and the log and the replay say NOT_RUN
+// with the reason — publication never invents a result. The JARs and wheels of the package stage
+// remain ordinary artifacts, unaffected by any of this.
 //
-// **Punto de contacto — `core.junit.publishReports`.** The runtime installed today (0.97.0) has
-// no JUnit publication step, so the examples stage → archive → verdict by hand. When pipeline-kotlin
-// ships that step (PR #474: the declaration verifies every selected file parses as junit-xml and
-// captures it through the run's archive port; a glob that matched nothing is never a pass), replace
-// the stage → archive → replay dance of the test stages with a single publication declaration over
-// the same `junit-reports/<suite>/` pattern. This comment is the one contact point per example.
+// **La publicación es `junit.results`, no un glob de nombres.** El paso declara EL informe
+// (`junitResults("junit-reports/<suite>/junit.xml", ".", failOnFailure = false)`); con
+// `failOnFailure = false` el paso acredita (parsea y recibe) y el veredicto lo dicta el replay,
+// como siempre en este ejemplo. El SDK registrado por el runtime instalado (pipeline-kotlin
+// 0.97.0+, plugin oficial `junit` 0.1.0) es el que lo ejecuta.
 //
 // Run: pipelinek run fastapi.pipeline.kts (with the manifest's values in the environment)
+
+import dev.rubentxu.pipeline.v2.sdk.junit.step.junitResults
 
 pipeline {
     /** The variables the shell stages read. They are written to `env.sh` by the first stage. */
@@ -332,7 +338,7 @@ pipeline {
                 fi
                 echo "${'$'}verdict" > "${'$'}workspace/junit-reports/unit/verdict"
             """.trimIndent())))
-            if (reasonToSkip("unit") == null) archiveArtifacts("junit-reports/unit/*.xml")
+            if (reasonToSkip("unit") == null) junitResults("junit-reports/unit/junit.xml", ".", failOnFailure = false)
             sh(stageOrSkip("unit", """
                 set -eu
                 verdict=${'$'}(cat "junit-reports/unit/verdict" 2>/dev/null || echo no-verdict)
@@ -354,6 +360,10 @@ pipeline {
                 workspace="${'$'}PWD"
                 DB_IS_REACHABLE
                 if [ "${'$'}db_status" != "0" ]; then
+                  mkdir -p "${'$'}workspace/junit-reports/integration"
+                  # La etapa no corre, pero la publicacion declarada necesita su informe: un
+                  # testsuite de cero tests declara que no corrio nada, no inventa un resultado.
+                  printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' '<testsuite name="integration" tests="0" failures="0" errors="0" skipped="0" time="0"/>' > "${'$'}workspace/junit-reports/integration/junit.xml"
                   echo integration=NOT_RUN reason=no-database-reachable
                   exit 0
                 fi
@@ -380,7 +390,7 @@ pipeline {
                 fi
                 echo "${'$'}verdict" > "${'$'}workspace/junit-reports/integration/verdict"
             """.trimIndent())))
-            if (reasonToSkip("integration") == null) archiveArtifacts("junit-reports/integration/*.xml", allowEmptyArchive = true)
+            if (reasonToSkip("integration") == null) junitResults("junit-reports/integration/junit.xml", ".", failOnFailure = false)
             sh(stageOrSkip("integration", """
                 set -eu
                 if [ ! -f "junit-reports/integration/verdict" ]; then
